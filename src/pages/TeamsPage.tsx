@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react';
 import { Users, Plus, UserPlus, Crown, X } from 'lucide-react';
 import { useAuth } from '../contexts/AuthContext';
-import { supabase, Team, Challenge, Profile } from '../lib/supabase';
+import { Team, Challenge, Profile, teamService, teamMemberService, challengeService, userService } from '../lib/supabase';
 
 type TeamWithMembers = Team & {
   leader?: Profile;
@@ -35,71 +35,80 @@ export function TeamsPage() {
   }
 
   async function loadTeams() {
-    const { data, error } = await supabase
-      .from('teams')
-      .select(
-        `
-        *,
-        leader:profiles!teams_leader_id_fkey(username, full_name),
-        challenge:challenges(title),
-        team_members(count)
-      `
-      )
-      .eq('is_recruiting', true);
+    try {
+      const recruitingTeams = await teamService.getRecruitingTeams();
+      
+      // 加载关联的队长、赛题和成员数信息
+      const teamsWithDetails = await Promise.all(
+        recruitingTeams.map(async (team) => {
+          const leader = team.leader_id ? await userService.getUserById(team.leader_id) : null;
+          const challenge = team.challenge_id ? await challengeService.getChallengeById(team.challenge_id) : null;
+          const members = await teamMemberService.getTeamMembers(team.id);
+          
+          return {
+            ...team,
+            leader,
+            challenge,
+            member_count: members.length,
+          };
+        })
+      );
 
-    if (error) throw error;
-
-    const teamsWithCount = (data || []).map((team: any) => ({
-      ...team,
-      leader: team.leader,
-      challenge: team.challenge,
-      member_count: team.team_members[0]?.count || 0,
-    }));
-
-    setTeams(teamsWithCount);
+      setTeams(teamsWithDetails);
+    } catch (error) {
+      console.error('Error loading teams:', error);
+      throw error;
+    }
   }
 
   async function loadChallenges() {
-    const { data, error } = await supabase
-      .from('challenges')
-      .select('*')
-      .eq('is_active', true);
-
-    if (error) throw error;
-    setChallenges(data || []);
+    try {
+      const activeChallenges = await challengeService.getActiveChallenges();
+      setChallenges(activeChallenges);
+    } catch (error) {
+      console.error('Error loading challenges:', error);
+      throw error;
+    }
   }
 
   async function loadMyTeam() {
     if (!user) return;
 
-    const { data: memberData, error: memberError } = await supabase
-      .from('team_members')
-      .select('team_id')
-      .eq('user_id', user.id)
-      .maybeSingle();
+    try {
+      const userTeams = await teamMemberService.getUserTeams(user.id);
 
-    if (memberError) throw memberError;
+      if (userTeams && userTeams.length > 0) {
+        const teamId = userTeams[0].team_id;
+        const teamData = await teamService.getTeamById(teamId);
 
-    if (memberData) {
-      const { data: teamData, error: teamError } = await supabase
-        .from('teams')
-        .select(
-          `
-          *,
-          leader:profiles!teams_leader_id_fkey(username, full_name),
-          challenge:challenges(title),
-          members:team_members(
-            user_id,
-            role,
-            profiles(username, full_name, skills)
-          )
-        `
-        )
-        .eq('id', memberData.team_id)
-        .single();
+        if (teamData) {
+          const leader = teamData.leader_id ? await userService.getUserById(teamData.leader_id) : null;
+          const challenge = teamData.challenge_id ? await challengeService.getChallengeById(teamData.challenge_id) : null;
+          const teamMembers = await teamMemberService.getTeamMembers(teamData.id);
+          
+          // 加载每个成员的详细信息
+          const membersWithProfiles = await Promise.all(
+            teamMembers.map(async (member) => {
+              const profiles = await userService.getUserById(member.user_id);
+              return {
+                user_id: member.user_id,
+                role: member.role,
+                profiles,
+              };
+            })
+          );
 
-      if (teamError) throw teamError;
-      setMyTeam(teamData as any);
+          setMyTeam({
+            ...teamData,
+            leader,
+            challenge,
+            members: membersWithProfiles,
+          } as any);
+        }
+      }
+    } catch (error) {
+      console.error('Error loading my team:', error);
+      throw error;
     }
   }
 
@@ -110,13 +119,20 @@ export function TeamsPage() {
     }
 
     try {
-      const { error } = await supabase.from('team_members').insert({
+      // 检查用户是否已经在团队中
+      const isAlreadyInTeam = await teamMemberService.isUserInTeam(user.id, teamId);
+      if (isAlreadyInTeam) {
+        alert('您已经在这个团队中了');
+        return;
+      }
+
+      await teamMemberService.addTeamMember({
         team_id: teamId,
         user_id: user.id,
         role: 'member',
+        status: 'approved',
       });
 
-      if (error) throw error;
       alert('加入成功！');
       loadData();
     } catch (error) {
@@ -135,15 +151,14 @@ export function TeamsPage() {
 
     if (confirm('确定要离开这个团队吗？')) {
       try {
-        const { error } = await supabase
-          .from('team_members')
-          .delete()
-          .eq('team_id', myTeam.id)
-          .eq('user_id', user.id);
-
-        if (error) throw error;
-        alert('已离开团队');
-        loadData();
+        const userTeams = await teamMemberService.getUserTeams(user.id);
+        const memberRecord = userTeams.find(m => m.team_id === myTeam.id);
+        
+        if (memberRecord) {
+          await teamMemberService.removeTeamMember(memberRecord.id);
+          alert('已离开团队');
+          loadData();
+        }
       } catch (error) {
         console.error('Error leaving team:', error);
         alert('操作失败');
@@ -342,27 +357,21 @@ function CreateTeamModal({
 
     setLoading(true);
     try {
-      const { data: teamData, error: teamError } = await supabase
-        .from('teams')
-        .insert({
-          name: formData.name,
-          description: formData.description,
-          challenge_id: formData.challenge_id || null,
-          max_members: formData.max_members,
-          leader_id: user.id,
-        })
-        .select()
-        .single();
+      const teamData = await teamService.createTeam({
+        name: formData.name,
+        description: formData.description,
+        challenge_id: formData.challenge_id || null,
+        max_members: formData.max_members,
+        leader_id: user.id,
+        is_recruiting: true,
+      });
 
-      if (teamError) throw teamError;
-
-      const { error: memberError } = await supabase.from('team_members').insert({
+      await teamMemberService.addTeamMember({
         team_id: teamData.id,
         user_id: user.id,
         role: 'leader',
+        status: 'approved',
       });
-
-      if (memberError) throw memberError;
 
       alert('团队创建成功！');
       onSuccess();

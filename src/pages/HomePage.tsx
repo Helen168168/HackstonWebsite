@@ -1,11 +1,15 @@
 import { Calendar, Trophy, Users, Rocket, Clock } from 'lucide-react';
 import { useState, useEffect } from 'react';
+import { useAuth } from '../contexts/AuthContext';
+import { AuthModal } from '../components/AuthModal';
 
 type HomePageProps = {
   onNavigate: (page: string) => void;
 };
 
 export function HomePage({ onNavigate }: HomePageProps) {
+  const { user } = useAuth();
+  const [showAuthModal, setShowAuthModal] = useState(false);
   // 倒计时器状态 - 目标日期：2024年1月20日
   const targetDate = new Date('2024-01-20T09:00:00').getTime();
   const [timeLeft, setTimeLeft] = useState({
@@ -215,13 +219,27 @@ export function HomePage({ onNavigate }: HomePageProps) {
             立即报名，加入数百位创新者的行列
           </p>
           <button
-            onClick={() => onNavigate('challenges')}
+            onClick={() => {
+              if (user) {
+                // 已登录用户跳转到个人中心
+                onNavigate('profile');
+              } else {
+                // 未登录用户打开注册模态框
+                setShowAuthModal(true);
+              }
+            }}
             className="bg-white text-blue-600 px-8 py-4 rounded-lg font-semibold text-lg hover:bg-blue-50 transition transform hover:scale-105 shadow-lg"
           >
             立即开始
           </button>
         </div>
       </div>
+
+      <AuthModal
+        isOpen={showAuthModal}
+        onClose={() => setShowAuthModal(false)}
+        mode="signup"
+      />
     </div>
   );
 }

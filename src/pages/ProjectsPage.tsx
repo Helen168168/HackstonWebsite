@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react';
 import { ExternalLink, Github, Video, Edit2, Send, Rocket } from 'lucide-react';
 import { useAuth } from '../contexts/AuthContext';
-import { supabase, Project, Team, Challenge } from '../lib/supabase';
+import { Project, Team, Challenge, projectService, teamService, teamMemberService, challengeService } from '../lib/supabase';
 
 type ProjectWithDetails = Project & {
   team?: Team;
@@ -31,57 +31,70 @@ export function ProjectsPage() {
   }
 
   async function loadProjects() {
-    const { data, error } = await supabase
-      .from('projects')
-      .select(
-        `
-        *,
-        team:teams(name),
-        challenge:challenges(title)
-      `
-      )
-      .eq('status', 'submitted')
-      .order('submitted_at', { ascending: false });
-
-    if (error) throw error;
-    setProjects((data as any) || []);
+    try {
+      const projects = await projectService.getSubmittedProjects();
+      
+      // 加载关联的团队和赛题信息
+      const projectsWithDetails = await Promise.all(
+        projects.map(async (project) => {
+          const team = project.team_id ? await teamService.getTeamById(project.team_id) : null;
+          const challenge = project.challenge_id ? await challengeService.getChallengeById(project.challenge_id) : null;
+          return {
+            ...project,
+            team,
+            challenge,
+          };
+        })
+      );
+      
+      // 按提交时间排序
+      projectsWithDetails.sort((a, b) => {
+        if (!a.submitted_at) return 1;
+        if (!b.submitted_at) return -1;
+        return new Date(b.submitted_at).getTime() - new Date(a.submitted_at).getTime();
+      });
+      
+      setProjects(projectsWithDetails);
+    } catch (error) {
+      console.error('Error loading projects:', error);
+      throw error;
+    }
   }
 
   async function loadMyTeam() {
     if (!user) return;
 
-    const { data: memberData } = await supabase
-      .from('team_members')
-      .select('team_id')
-      .eq('user_id', user.id)
-      .maybeSingle();
+    try {
+      // 获取用户所在的团队
+      const userTeams = await teamMemberService.getUserTeams(user.id);
+      
+      if (userTeams && userTeams.length > 0) {
+        const teamId = userTeams[0].team_id;
+        const teamData = await teamService.getTeamById(teamId);
 
-    if (memberData) {
-      const { data: teamData } = await supabase
-        .from('teams')
-        .select('*')
-        .eq('id', memberData.team_id)
-        .single();
+        if (teamData) {
+          setMyTeam(teamData);
 
-      if (teamData) {
-        setMyTeam(teamData);
+          // 获取团队的项目
+          const projectData = await projectService.getProjectByTeamId(teamData.id);
 
-        const { data: projectData } = await supabase
-          .from('projects')
-          .select(
-            `
-            *,
-            team:teams(name),
-            challenge:challenges(title)
-          `
-          )
-          .eq('team_id', teamData.id)
-          .maybeSingle();
-
-        if (projectData) {
-          setMyProject(projectData as any);
+          if (projectData) {
+            const team = await teamService.getTeamById(projectData.team_id);
+            const challenge = projectData.challenge_id 
+              ? await challengeService.getChallengeById(projectData.challenge_id)
+              : null;
+            
+            setMyProject({
+              ...projectData,
+              team,
+              challenge,
+            });
+          }
         }
       }
+    } catch (error) {
+      console.error('Error loading my team:', error);
+      throw error;
     }
   }
 
@@ -356,22 +369,15 @@ function SubmitProjectModal({
         demo_url: formData.demo_url,
         repo_url: formData.repo_url,
         video_url: formData.video_url,
-        status: 'submitted',
+        status: 'submitted' as const,
         submitted_at: new Date().toISOString(),
         updated_at: new Date().toISOString(),
       };
 
       if (existingProject) {
-        const { error } = await supabase
-          .from('projects')
-          .update(projectData)
-          .eq('id', existingProject.id);
-
-        if (error) throw error;
+        await projectService.updateProject(existingProject.id, projectData);
       } else {
-        const { error } = await supabase.from('projects').insert(projectData);
-
-        if (error) throw error;
+        await projectService.createProject(projectData);
       }
 
       alert('提交成功！');

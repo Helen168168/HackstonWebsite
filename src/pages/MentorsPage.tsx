@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { Users, Award } from 'lucide-react';
-import { supabase, Mentor } from '../lib/supabase';
+import { Mentor, mentorService } from '../lib/supabase';
 
 export function MentorsPage() {
   const [mentors, setMentors] = useState<Mentor[]>([]);
@@ -13,14 +13,7 @@ export function MentorsPage() {
 
   async function loadMentors() {
     try {
-      const { data, error } = await supabase
-        .from('mentors')
-        .select('*')
-        .order('display_order', { ascending: true });
-
-      if (error) throw error;
-
-      const allMentors = data || [];
+      const allMentors = await mentorService.getAllMentors();
       setMentors(allMentors.filter((m) => m.role === 'mentor'));
       setJudges(allMentors.filter((m) => m.role === 'judge'));
     } catch (error) {

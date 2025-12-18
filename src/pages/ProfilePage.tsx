@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react';
 import { User, Github, Mail, Edit2, Save, X } from 'lucide-react';
 import { useAuth } from '../contexts/AuthContext';
-import { supabase } from '../lib/supabase';
+import { userService } from '../lib/supabase';
 
 export function ProfilePage() {
   const { user, profile } = useAuth();
@@ -33,18 +33,13 @@ export function ProfilePage() {
 
     setLoading(true);
     try {
-      const { error } = await supabase
-        .from('profiles')
-        .update({
-          full_name: formData.full_name,
-          bio: formData.bio,
-          github_url: formData.github_url,
-          skills: formData.skills,
-          updated_at: new Date().toISOString(),
-        })
-        .eq('id', user.id);
+      await userService.updateUser(user.id, {
+        full_name: formData.full_name,
+        bio: formData.bio,
+        github_url: formData.github_url,
+        skills: formData.skills,
+      } as any);
 
-      if (error) throw error;
       setEditing(false);
       window.location.reload();
     } catch (error) {

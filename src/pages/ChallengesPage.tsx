@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { Trophy, Tag, TrendingUp } from 'lucide-react';
-import { supabase, Challenge } from '../lib/supabase';
+import { Challenge, challengeService } from '../lib/supabase';
 
 export function ChallengesPage() {
   const [challenges, setChallenges] = useState<Challenge[]>([]);
@@ -12,14 +12,12 @@ export function ChallengesPage() {
 
   async function loadChallenges() {
     try {
-      const { data, error } = await supabase
-        .from('challenges')
-        .select('*')
-        .eq('is_active', true)
-        .order('created_at', { ascending: true });
-
-      if (error) throw error;
-      setChallenges(data || []);
+      const activeChallenges = await challengeService.getActiveChallenges();
+      // 按创建时间排序
+      activeChallenges.sort((a, b) => 
+        new Date(a.created_at).getTime() - new Date(b.created_at).getTime()
+      );
+      setChallenges(activeChallenges);
     } catch (error) {
       console.error('Error loading challenges:', error);
     } finally {
